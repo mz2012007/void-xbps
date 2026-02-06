@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# dotfiles-sync.sh
+# Git sync script using SSH only (no HTTPS, no credentials store)
+# With smart colorized output
+
+set -euo pipefail
+IFS=$'\n\t'
+
+# --------------------------
+# Color support (TTY-aware)
+# --------------------------
+if [[ -t 1 ]]; then
+  RED="\033[31m"
+  GREEN="\033[32m"
+  YELLOW="\033[33m"
+  BLUE="\033[34m"
+  RESET="\033[0m"
+else
+  RED="" GREEN="" YELLOW="" BLUE="" RESET=""
+fi
+
+info() { echo -e "${BLUE}ℹ️  $*${RESET}"; }
+warn() { echo -e "${YELLOW}⚠️  $*${RESET}"; }
+success() { echo -e "${GREEN}✅ $*${RESET}"; }
+error() {
+  echo -e "${RED}❌ $*${RESET}"
+  exit 1
+}
+
+# --------------------------
+# Handle Ctrl+C
+# --------------------------
+trap 'error "Operation cancelled by user"' INT
+
+REPO_DIR="$HOME/void-xbps/"
+SSH_REMOTE="git@github.com:mz2012007/void-xbps.git"
+REMOTE_NAME="dotfiles"
+BRANCH="main"
+SSH_KEY="$HOME/.ssh/id_ed25519"
+
+# --------------------------
+# Sanity checks
+# --------------------------
+command -v git >/dev/null 2>&1 || error "git is not installed"
+command -v ssh >/dev/null 2>&1 || error "ssh is not installed"
+
+[ -d "$REPO_DIR" ] || error "$REPO_DIR not found"
+
+cd "$REPO_DIR"
+
+# --------------------------
+# Ensure SSH key exists
+# --------------------------
+[ -f "$SSH_KEY" ] || error "SSH key not found at $SSH_KEY. Run ssh-setup first."
+
+# --------------------------
+# Ensure git repo
+# --------------------------
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  info "Initializing git repository"
+  git init
+
+  # 🆕 make main bransh first time
+  git checkout -b "$BRANCH"
+fi
+
+# 🆕 ensure we in true branch
+if ! git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
+  info "Creating main branch"
+  git checkout -b "$BRANCH"
+else
+  git checkout "$BRANCH" 2>/dev/null || true
+fi
+
+# --------------------------
+# Ensure user config (local only)
+# --------------------------
+git config user.name >/dev/null 2>&1 || git config user.name "MohamedZaki"
+git config user.email >/dev/null 2>&1 || git config user.email "mohamedgamer139@gmail.com"
+
+# --------------------------
+# Enforce SSH remote
+# --------------------------
+if git remote get-url "$REMOTE_NAME" >/dev/null 2>&1; then
+  CURRENT_URL="$(git remote get-url "$REMOTE_NAME")"
+  if [[ "$CURRENT_URL" != git@github.com:* ]]; then
+    warn "Replacing HTTPS remote with SSH"
+    git remote set-url "$REMOTE_NAME" "$SSH_REMOTE"
+  else
+    info "SSH remote already configured"
+  fi
+else
+  info "Adding SSH remote"
+  git remote add "$REMOTE_NAME" "$SSH_REMOTE"
+fi
+
+# --------------------------
+# Run copy script if exists
+# --------------------------
+#if [ -x "./cp.bak" ]; then
+#  info "Running cp.sh"
+#  ./cp.bak
+#else
+#  warn "cp.sh not found or not executable, skipping"
+#fi
+
+$HOME/void-xbps/void-xbps.sh
+# --------------------------
+# Git workflow
+# --------------------------
+git rm -rf --cached . || true
+git add -A
+
+if [[ -z "${1-}" ]]; then
+  if git diff --cached --quiet; then
+    warn "No changes to amend"
+  else
+    if git rev-parse --verify HEAD >/dev/null 2>&1; then
+      info "Amending last commit"
+      git commit --amend --no-edit
+    else
+      info "Creating initial commit"
+      git commit -m "chore: initial commit"
+    fi
+  fi
+
+  info "Pushing (force-with-lease)"
+  git push -f "$REMOTE_NAME" "$BRANCH"
+  success "Updated (amend)"
+else
+  git commit -m "$1" || warn "Nothing to commit"
+  git push "$REMOTE_NAME" "$BRANCH"
+  success "Changed with message"
+fi
